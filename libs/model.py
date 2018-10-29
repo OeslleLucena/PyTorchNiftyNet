@@ -1,6 +1,7 @@
 #code ffrom the following repository: https://github.com/pykao/Modified-3D-UNet-Pytorch
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 
 
 class Modified3DUNet(nn.Module):
@@ -192,4 +193,7 @@ class Modified3DUNet(nn.Module):
 		out = out.permute(0, 2, 3, 4, 1).contiguous().view(-1, self.n_classes)
 		#out = out.view(-1, self.n_classes)
 		out = self.softmax(out)
-		return out, seg_layer
+		#return out, seg_layer
+		return F.sigmoid(seg_layer)
+
+
