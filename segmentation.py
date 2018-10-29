@@ -5,6 +5,7 @@ from libs import dataset_niftynet as dset_utils
 from libs import loss as loss_utils
 from libs import model as cnn_utils
 
+from niftynet.engine.sampler_uniform_v2 import UniformSampler
 from niftynet.engine.sampler_balanced_v2 import BalancedSampler
 from niftynet.io.image_reader import ImageReader
 from niftynet.io.image_sets_partitioner import ImageSetsPartitioner
@@ -50,7 +51,7 @@ def get_sampler(image_reader,patch_size, phase):
 
     if phase == 'training' or phase == 'validation':
 
-        sampler = BalancedSampler(image_reader,
+        sampler = UniformSampler(image_reader,
                                  window_sizes=patch_size,
                                  windows_per_image=4)
     elif phase == 'inference':
@@ -107,14 +108,14 @@ def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
 
                 # forward
                 # track history if only in train
-                with torch.set_grad_enabled(phase == 'train'):
+                with torch.set_grad_enabled(phase == 'training'):
                     outputs = model(inputs)
                     pred = (outputs > 0.5)
 
                     los = criterion(outputs, labels)
 
                     # backward + optimize only if in training phase
-                    if phase == 'train':
+                    if phase == 'training':
                         los.backward()
                         optimizer.step()
 
@@ -136,7 +137,7 @@ def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
                 torch.save(model.state_dict(), cp_path.format(epoch + 1))
 
             # deep copy the model
-            if phase == 'val' and epoch_loss < best_loss:
+            if phase == 'validation' and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 torch.save(model.state_dict(), cp_path)
                 print('Checkpoint {} saved !'.format(epoch + 1))
@@ -191,9 +192,10 @@ def main():
     data_param = {'image': {'path_to_search': opt.image_path,
                             'filename_contains': 'CC'},
                   'label': {'path_to_search': opt.label_path,
-                            'filename_contains': 'CC'},
-                  'sampler': {'path_to_search': opt.label_path, # binary weights for sampling
                             'filename_contains': 'CC'}}
+        # ,
+        #           'sampler': {'path_to_search': opt.label_path, # binary weights for sampling
+        #                     'filename_contains': 'CC'}}
 
     # Partitioning dataset using NiftyNet
     image_sets_partitioner = ImageSetsPartitioner().initialise(data_param=data_param,
@@ -245,10 +247,12 @@ def parsing_data():
                         type=int, help='batch size')
     parser.add_argument('-cp_path', default='./CP.pth',
                         type=str, help='checkpoint output filename')
-    parser.add_argument('-image_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/data',
+    parser.add_argument('-image_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/Original',
                         type=str, help='image path')
     parser.add_argument('-label_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/STAPLE-binary',
                         type=str, help='label path')
+    # parser.add_argument('-weight_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/weight',
+    #                     type=str, help='label path')
     parser.add_argument('-pred_path', default='/home/oeslle/Documents/pred',
                         type=str, help='output path for inferences')
 
