@@ -5,7 +5,6 @@ from libs import dataset_niftynet as dset_utils
 from libs import loss as loss_utils
 from libs import model as cnn_utils
 
-from niftynet.engine.sampler_uniform_v2 import UniformSampler
 from niftynet.engine.sampler_balanced_v2 import BalancedSampler
 from niftynet.io.image_reader import ImageReader
 from niftynet.io.image_sets_partitioner import ImageSetsPartitioner
