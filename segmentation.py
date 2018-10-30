@@ -1,4 +1,5 @@
-import time, argparse
+import time
+import argparse
 import numpy as np
 
 from libs import dataset_niftynet as dset_utils
@@ -6,7 +7,6 @@ from libs import loss as loss_utils
 from libs import model as cnn_utils
 
 from niftynet.engine.sampler_uniform_v2 import UniformSampler
-from niftynet.engine.sampler_balanced_v2 import BalancedSampler
 from niftynet.io.image_reader import ImageReader
 from niftynet.io.image_sets_partitioner import ImageSetsPartitioner
 from niftynet.layer.mean_variance_normalisation import MeanVarNormalisationLayer
@@ -15,29 +15,29 @@ from niftynet.engine.sampler_grid_v2 import GridSampler
 from niftynet.engine.windows_aggregator_grid import GridSamplesAggregator
 from niftynet.evaluation.pairwise_measures import PairwiseMeasures
 
-
 import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
 
 
-def get_reader(data_param,image_sets_partitioner,phase):
+def get_reader(data_param, image_sets_partitioner, phase):
 
     # Using Nifty Reader
     if phase == 'training':
-        image_reader = ImageReader().initialise(data_param,
-                                                file_list=image_sets_partitioner.get_file_list(TRAIN))
+        image_reader = ImageReader().initialise(
+            data_param, file_list=image_sets_partitioner.get_file_list(TRAIN))
 
     elif phase == 'validation':
-        image_reader = ImageReader().initialise(data_param,
-                                                file_list=image_sets_partitioner.get_file_list(VALID))
+        image_reader = ImageReader().initialise(
+            data_param, file_list=image_sets_partitioner.get_file_list(VALID))
 
     elif phase == 'inference':
 
-        image_reader = ImageReader().initialise(data_param,
-                                                file_list=image_sets_partitioner.get_file_list(INFER))
+        image_reader = ImageReader().initialise(
+            data_param, file_list=image_sets_partitioner.get_file_list(INFER))
     else:
-        raise Exception('Invalid phase choice: {}'.format({'phase':['train','validation','inference']}))
+        raise Exception('Invalid phase choice: {}'.format(
+            {'phase':['train','validation','inference']}))
 
 
     # Adding preprocessing layers
@@ -46,39 +46,38 @@ def get_reader(data_param,image_sets_partitioner,phase):
 
     return image_reader
 
-def get_sampler(image_reader,patch_size, phase):
+def get_sampler(image_reader, patch_size, phase):
 
-
-    if phase == 'training' or phase == 'validation':
-
+    if phase in ('training', 'validation'):
         sampler = UniformSampler(image_reader,
                                  window_sizes=patch_size,
                                  windows_per_image=4)
     elif phase == 'inference':
-
         sampler = GridSampler(image_reader,
                               window_sizes=patch_size,
-                              window_border=(8,8,8),
+                              window_border=(8, 8, 8),
                               batch_size=1)
     else:
-        raise Exception('Invalid phase choice: {}'.format({'phase': ['train', 'validation', 'inference']}))
-
+        raise Exception('Invalid phase choice: {}'.format(
+            {'phase': ['train', 'validation', 'inference']}))
 
     return sampler
 
 
-def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
+def train(dsets, model, criterion, optimizer,
+          num_epochs, device, cp_path, batch_size):
 
     since = time.time()
 
-    dataloaders = {x: DataLoader(dsets[x], batch_size=batch_size, shuffle=True, num_workers=4)
+    dataloaders = {x: DataLoader(dsets[x], batch_size=batch_size,
+                                 shuffle=True, num_workers=4)
                   for x in ['training', 'validation']}
 
     model = model.to(device)
 
 
     for epoch in range(num_epochs):
-        print('Epoch {}/{}'.format(epoch+1, num_epochs))
+        print('Epoch {}/{}'.format(epoch + 1, num_epochs))
         print('-' * 10)
 
         # Each epoch has a training and validation phase
@@ -97,8 +96,8 @@ def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
 
                 nbatches, wsize, x, y, z, nchannels = inputs.size()
 
-                inputs = inputs.view(nbatches * wsize, nchannels, x,y,z)
-                labels = labels.view(nbatches * wsize, nchannels, x,y,z)
+                inputs = inputs.view(nbatches * wsize, nchannels, x, y, z)
+                labels = labels.view(nbatches * wsize, nchannels, x, y, z)
 
                 inputs = inputs.to(device)
                 labels = labels.to(device)
@@ -112,25 +111,26 @@ def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
                     outputs = model(inputs)
                     pred = (outputs > 0.5)
 
-                    los = criterion(outputs, labels)
+                    loss = criterion(outputs, labels)
 
                     # backward + optimize only if in training phase
                     if phase == 'training':
-                        los.backward()
+                        loss.backward()
                         optimizer.step()
 
                 # statistics
                 epoch_samples += inputs.size(0)
-                running_loss += los.item()*inputs.size(0)
-                running_corrects += PairwiseMeasures(pred.cpu().numpy(),
-                                                     labels.cpu().numpy()).dice_score()*inputs.size(0)
+                running_loss += loss.item()*inputs.size(0)
+                measures = PairwiseMeasures(
+                    pred.cpu().numpy(), labels.cpu().numpy())
+                running_corrects += measures
 
+            epoch_loss = running_loss / epoch_samples
 
-            epoch_loss = running_loss / (epoch_samples)
+            epoch_acc = running_corrects / epoch_samples
 
-            epoch_acc = running_corrects / (epoch_samples)
-
-            print('{} Loss: {:.4f} Dice: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+            print('{} Loss: {:.4f} Dice: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
 
             if epoch == 0:
                 best_loss = epoch_loss
@@ -140,25 +140,28 @@ def train(dsets,model,criterion,optimizer,num_epochs,device,cp_path,batch_size):
             if phase == 'validation' and epoch_loss < best_loss:
                 best_loss = epoch_loss
                 torch.save(model.state_dict(), cp_path)
-                print('Checkpoint {} saved !'.format(epoch + 1))
+                print('Checkpoint {} saved!'.format(epoch + 1))
 
         print()
 
     time_elapsed = time.time() - since
-    print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
 
 
-def inference(sampler,model,device,pred_path,cp_path):
+def inference(sampler, model,device, pred_path, cp_path):
 
     output = GridSamplesAggregator(image_reader=sampler.reader,
-                                           output_path=pred_path)
+                                   output_path=pred_path)
 
     model.load_state_dict(torch.load(cp_path))
     model.to(device)
     model.eval()
 
     for batch_output in sampler():
-        window =  batch_output['image'][...,0,:] # [...,0,:] eliminates time coordinate from NiftyNet Volume
+
+        # [...,0,:] eliminates time coordinate from NiftyNet Volume
+        window =  batch_output['image'][...,0,:]
 
         nb, x, y, z, nc = window.shape
         window = window.reshape(nb, nc, x, y, z)
@@ -168,7 +171,8 @@ def inference(sampler,model,device,pred_path,cp_path):
             outputs = model(window)
             outputs = (outputs > 0.5)
 
-        output.decode_batch(outputs.cpu().numpy().reshape(nb, x, y, z, nc).astype(np.uint8),
+        outputs = outputs.cpu().numpy().reshape(nb, x, y, z, nc)
+        output.decode_batch(outputs.astype(np.uint8),
                                     batch_output['image_location'])
 
 
@@ -193,20 +197,18 @@ def main():
                             'filename_contains': 'CC'},
                   'label': {'path_to_search': opt.label_path,
                             'filename_contains': 'CC'}}
-        # ,
-        #           'sampler': {'path_to_search': opt.label_path, # binary weights for sampling
-        #                     'filename_contains': 'CC'}}
 
-    # Partitioning dataset using NiftyNet
-    image_sets_partitioner = ImageSetsPartitioner().initialise(data_param=data_param,
-                                                               data_split_file=opt.data_split_file,
-                                                               new_partition=False,
-                                                               ratios=opt.ratios)
+    image_sets_partitioner = ImageSetsPartitioner().initialise(
+        data_param=data_param,
+        data_split_file=opt.data_split_file,
+        new_partition=False,
+        ratios=opt.ratios
+    )
 
-    readers = {x: get_reader(data_param,image_sets_partitioner,x)
-               for x in ['training', 'validation','inference']}
-    samplers = {x: get_sampler(readers[x],opt.patch_size,x)
-               for x in ['training', 'validation','inference']}
+    readers = {x: get_reader(data_param, image_sets_partitioner, x)
+               for x in ['training', 'validation', 'inference']}
+    samplers = {x: get_sampler(readers[x], opt.patch_size, x)
+                for x in ['training', 'validation', 'inference']}
 
     # Training stage only
     dsets = {x: dset_utils.DatasetNiftySampler(sampler=samplers[x])
@@ -214,16 +216,17 @@ def main():
 
 
     print("[INFO] Building model")
-    model = cnn_utils.Modified3DUNet(opt.in_channels,opt. n_classes)
+    model = cnn_utils.Modified3DUNet(opt.in_channels, opt.n_classes)
     criterion =  loss_utils.SoftDiceLoss()
     optimizer = optim.RMSprop(model.parameters(), lr=opt.lr)
 
     print("[INFO] Training")
-    train(dsets,model,criterion,optimizer,opt.num_epochs,device,opt.cp_path,opt.batch_size)
+    train(dsets, model, criterion, optimizer,
+          opt.num_epochs, device, opt.cp_path, opt.batch_size)
 
 
     print("[INFO] Inference")
-    inference(samplers['inference'],model,device,opt.pred_path,opt.cp_path)
+    inference(samplers['inference'], model, device, opt.pred_path, opt.cp_path)
 
 
 def parsing_data():
@@ -251,14 +254,12 @@ def parsing_data():
                         type=str, help='image path')
     parser.add_argument('-label_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/STAPLE-binary',
                         type=str, help='label path')
-    # parser.add_argument('-weight_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/weight',
-    #                     type=str, help='label path')
     parser.add_argument('-pred_path', default='/home/oeslle/Documents/pred',
                         type=str, help='output path for inferences')
 
     opt = parser.parse_args()
 
-    return  opt
+    return opt
 
 
 if __name__ == '__main__':
