@@ -14,6 +14,8 @@ from niftynet.engine.signal import TRAIN, VALID, INFER
 from niftynet.engine.sampler_grid_v2 import GridSampler
 from niftynet.engine.windows_aggregator_grid import GridSamplesAggregator
 from niftynet.evaluation.pairwise_measures import PairwiseMeasures
+from niftynet.layer.pad import PadLayer
+
 
 import torch
 from torch.utils.data import DataLoader
@@ -42,7 +44,11 @@ def get_reader(data_param, image_sets_partitioner, phase):
 
     # Adding preprocessing layers
     mean_variance_norm_layer = MeanVarNormalisationLayer(image_name='image')
+    pad_layer = PadLayer(image_name=('image', 'label'), border=(8,8,8))
     image_reader.add_preprocessing_layers([mean_variance_norm_layer])
+
+    if phase == 'inference':
+        image_reader.add_preprocessing_layers([pad_layer])
 
     return image_reader
 
@@ -51,7 +57,7 @@ def get_sampler(image_reader, patch_size, phase):
     if phase in ('training', 'validation'):
         sampler = UniformSampler(image_reader,
                                  window_sizes=patch_size,
-                                 windows_per_image=4)
+                                 windows_per_image=2)
     elif phase == 'inference':
         sampler = GridSampler(image_reader,
                               window_sizes=patch_size,
@@ -94,7 +100,7 @@ def train(dsets, model, criterion, optimizer,
             # Iterate over data
             for iteration, (inputs, labels) in enumerate(dataloaders[phase], 1):
 
-                nbatches, wsize, x, y, z, nchannels = inputs.size()
+                nbatches, wsize, nchannels, x, y, z, _ = inputs.size()
 
                 inputs = inputs.view(nbatches * wsize, nchannels, x, y, z)
                 labels = labels.view(nbatches * wsize, nchannels, x, y, z)
@@ -123,7 +129,7 @@ def train(dsets, model, criterion, optimizer,
                 running_loss += loss.item()*inputs.size(0)
                 measures = PairwiseMeasures(
                     pred.cpu().numpy(), labels.cpu().numpy())
-                running_corrects += measures
+                running_corrects += measures.dice_score()*inputs.size(0)
 
             epoch_loss = running_loss / epoch_samples
 
@@ -152,6 +158,7 @@ def train(dsets, model, criterion, optimizer,
 def inference(sampler, model,device, pred_path, cp_path):
 
     output = GridSamplesAggregator(image_reader=sampler.reader,
+                                   window_border=(8, 8, 8),
                                    output_path=pred_path)
 
     model.load_state_dict(torch.load(cp_path))
@@ -160,21 +167,24 @@ def inference(sampler, model,device, pred_path, cp_path):
 
     for batch_output in sampler():
 
-        # [...,0,:] eliminates time coordinate from NiftyNet Volume
-        window =  batch_output['image'][...,0,:]
+        model.load_state_dict(torch.load(cp_path))
+        model.to(device)
+        model.eval()
 
-        nb, x, y, z, nc = window.shape
-        window = window.reshape(nb, nc, x, y, z)
-        window = torch.Tensor(window).to(device)
+        for batch_output in sampler():
+            window = batch_output['image']
+            # [...,0,:] eliminates time coordinate from NiftyNet Volume
+            window = window[..., 0, :]
+            window = np.transpose(window, (0, 4, 1, 2, 3))
+            window = torch.Tensor(window).to(device)
 
-        with torch.no_grad():
-            outputs = model(window)
-            outputs = (outputs > 0.5)
+            with torch.no_grad():
+                outputs = model(window)
 
-        outputs = outputs.cpu().numpy().reshape(nb, x, y, z, nc)
-        output.decode_batch(outputs.astype(np.uint8),
-                                    batch_output['image_location'])
-
+            outputs = outputs.cpu().numpy()
+            outputs = np.transpose(outputs, (0, 2, 3, 4, 1))
+            output.decode_batch(outputs.astype(np.float32),
+                                batch_output['image_location'])
 
 
 def main():
@@ -216,7 +226,7 @@ def main():
 
 
     print("[INFO] Building model")
-    model = cnn_utils.Modified3DUNet(opt.in_channels, opt.n_classes)
+    model = cnn_utils.UNet3D(opt.in_channels, opt.n_classes)
     criterion =  loss_utils.SoftDiceLoss()
     optimizer = optim.RMSprop(model.parameters(), lr=opt.lr)
 
@@ -240,7 +250,7 @@ def parsing_data():
                         type=int, help='# of data channels')
     parser.add_argument('-n_classes', default=1,
                         type=int, help='# of output classes')
-    parser.add_argument('-num_epochs', default=6,
+    parser.add_argument('-num_epochs', default=1,
                         type=int, help='# of epochs')
     parser.add_argument('-lr', default=1e-4,
                         type=float, help='learning rate')
@@ -254,7 +264,7 @@ def parsing_data():
                         type=str, help='image path')
     parser.add_argument('-label_path', default='/home/oeslle/Documents/Datasets/CC359_NEW/STAPLE-binary',
                         type=str, help='label path')
-    parser.add_argument('-pred_path', default='/home/oeslle/Documents/pred',
+    parser.add_argument('-pred_path', default='/home/oeslle/Documents/pred_seg_brain',
                         type=str, help='output path for inferences')
 
     opt = parser.parse_args()
